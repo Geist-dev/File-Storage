@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>File Storage (FastAPI)</title>
+    <link rel="stylesheet" href="style.css?v=1"/>
+  </head>
+  <body>
+    <div id="toast" class="toast hidden"></div>
+    <div class="container">
+      <h1>📁 File Storage</h1>
+
+      <section id="auth">
+        <h2>Авторизация</h2>
+        <div class="row">
+          <input id="email" type="email" placeholder="email">
+          <input id="password" type="password" placeholder="password">
+          <button id="register">Зарегистрироваться</button>
+          <button id="login">Войти</button>
+        </div>
+        <div id="me"></div>
+        <button id="logout">Выйти</button>
+      </section>
+
+      <section id="upload" class="hidden">
+        <h2>Загрузка</h2>
+        <div id="dropzone" class="drop">Перетащи файлы сюда или выбери ниже</div>
+        <div class="row">
+          <input id="file" type="file" multiple />
+          <input id="folder" placeholder="папка (например: work/reports)" />
+        </div>
+        <div class="row">
+          <div class="chips" id="tagsChips"></div>
+          <input id="tagInput" type="text" placeholder="добавь тег и нажми Enter" />
+          <button id="uploadBtn">Загрузить</button>
+        </div>
+      </section>
+
+      <section id="list" class="hidden">
+        <h2>Мои файлы</h2>
+        <div class="row">
+          <input id="search" placeholder="поиск по имени">
+          <input id="tagFilter" placeholder="фильтр по тегу">
+          <select id="stateFilter">
+            <option value="active">Активные</option>
+            <option value="deleted">Корзина</option>
+            <option value="all">Все</option>
+          </select>
+          <button id="reload">Обновить</button>
+        </div>
+        <table id="filesTable">
+          <thead>
+            <tr><th>Имя</th><th>Размер</th><th>Публичный</th><th>Действия</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </div>
+    <script src="app.js?v=1" defer></script>
+  </body>
+</html>

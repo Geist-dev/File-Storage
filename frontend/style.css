@@ -1,0 +1,20 @@
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:#0b0d10;color:#e6edf3}
+.container{max-width:980px;margin:2rem auto;padding:1.2rem;background:#11151a;border-radius:12px;box-shadow:0 0 0 1px #222}
+h1{margin-top:0}.row{display:flex;gap:.5rem;flex-wrap:wrap;margin:.5rem 0}
+input,button,select{padding:.6rem .8rem;border-radius:8px;border:1px solid #333;background:#0f1317;color:#e6edf3}
+input:focus,select:focus{outline:none;border-color:#555}button{background:#1f6feb;border-color:#1f6feb;cursor:pointer}
+button:hover{filter:brightness(1.1)}table{width:100%;border-collapse:collapse;margin-top:.8rem}
+th,td{padding:.5rem;border-bottom:1px solid #222}.hidden{display:none}
+.drop{border:2px dashed #333; padding:1rem; text-align:center; border-radius:8px; background:#0f1317; margin-bottom:.5rem}
+.drop.dragover{border-color:#1f6feb; background:#0d1424}
+.chips{display:flex; gap:.4rem; flex-wrap:wrap; margin:.3rem 0}
+.chip{background:#222; padding:.2rem .5rem; border-radius:999px; display:flex; align-items:center; gap:.3rem}
+.chip button{background:transparent;border:none;color:#aaa;cursor:pointer}
+.thumb{height:38px; width:38px; object-fit:cover; border-radius:6px; margin-right:.4rem; vertical-align:middle}
+.path{color:#aaa; font-size:.9em}
+.status-badge{padding:.15rem .4rem; border-radius:6px; background:#1a1a1a}
+.error{border-color:#eb5b5b}
+.toast{position:fixed;top:14px;left:50%;transform:translateX(-50%);min-width:260px;max-width:90vw;padding:.7rem 1rem;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.3);z-index:9999;font-weight:600;text-align:center}
+.toast.info{background:#0d3b66;color:#d6e9ff;border:1px solid #174d84}
+.toast.error{background:#5b1a1a;color:#ffd3d3;border:1px solid #7a2a2a}
+.toast.success{background:#154d2c;color:#d8ffe9;border:1px solid #1b6a3b}
