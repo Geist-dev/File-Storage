@@ -64,9 +64,9 @@ ALLOWED_MIME=image/jpeg,image/png,image/webp,application/pdf,text/plain
 ```
 
 ## 📸 Скриншоты
-> _Сюда можно вставить скрины интерфейса: форма входа, загрузка файлов, список, корзина._
 
-![UI example](https://via.placeholder.com/900x450.png?text=FileStorage+UI+Example)
+![UI example](https://media.discordapp.net/attachments/1187106057403769018/1411493221619466340/image.png?ex=68b4db00&is=68b38980&hm=8c73af8dad5bb9ef128e1c52503c9f856a0809d28d504c71fab0827bf5b9550b&=&format=webp&quality=lossless&width=1240&height=860)
+![UI example](https://media.discordapp.net/attachments/1187106057403769018/1411493929840279643/image.png?ex=68b4dba9&is=68b38a29&hm=31c40731251adadc3a54ca4a306286adad74b4293e11a505c65fcd880d047a8a&=&format=webp&quality=lossless&width=1629&height=810)
 
 ## 🤝 Идеи для улучшений
 - ✅ Массовые операции (удаление/восстановление нескольких файлов)  
