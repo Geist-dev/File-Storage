@@ -37,8 +37,8 @@
 ## 🚀 Быстрый запуск (One-Click)
 1. Клонируй репозиторий:
    ```bash
-   git clone https://github.com/USERNAME/filestore-python.git
-   cd filestore-python
+   git clone https://github.com/Geist-dev/File-Storage.git
+   cd File-Storage
    ```
 2. Запусти скрипт:
    ```bash
