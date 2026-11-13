@@ -14,9 +14,9 @@ def get_current_user(
 ) -> User:
     token = creds.credentials
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])  # type: ignore
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
         user_id = int(payload.get("sub"))
-    except JWTError:
+    except (JWTError, ValueError, TypeError, OverflowError):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     user = db.get(User, user_id)
     if not user:
