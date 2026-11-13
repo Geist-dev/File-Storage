@@ -1,332 +1,324 @@
-// --- Helpers ---
-const API = 'http://127.0.0.1:8000';
-let token = localStorage.getItem('token') || '';
-const $ = (s) => document.querySelector(s);
-const on = (el, ev, fn) => el && el.addEventListener(ev, fn);
-// Глобально, чтобы точно было видно везде
-window.humanSize = function (bytes) {
-  if (bytes === 0) return '0 B';
-  if (!bytes && bytes !== 0) return '';
-  const units = ['B','KB','MB','GB','TB'];
-  const i = Math.max(0, Math.floor(Math.log(bytes) / Math.log(1024)));
-  const num = bytes / Math.pow(1024, i);
-  return num.toFixed(1) + ' ' + units[i];
-};
+'use strict';
 
-
-function show(sel, onState=true){
-  const el = $(sel);
-  if(!el) return;
-  el.classList[onState ? 'remove' : 'add']('hidden');
-}
-
-function showToast(msg, type='info', ms=3500){
-  const t = $('#toast'); if(!t) return;
-  t.className = `toast ${type}`;
-function humanSize(bytes) {
-  if (bytes === 0) return '0 B';
-  if (!bytes && bytes !== 0) return '';
-  const units = ['B','KB','MB','GB','TB'];
-  const i = Math.max(0, Math.floor(Math.log(bytes) / Math.log(1024)));
-  const num = bytes / Math.pow(1024, i);
-  return num.toFixed(1) + ' ' + units[i];
-}
-
-  t.textContent = String(msg ?? '');
-  t.classList.remove('hidden');
-  clearTimeout(window.__toastTimer);
-  window.__toastTimer = setTimeout(()=> t.classList.add('hidden'), ms);
-}
-
-async function req(path, opts = {}){
-  const headers = opts.headers ? {...opts.headers} : {};
-  if(token) headers['Authorization'] = 'Bearer ' + token;
-  const res = await fetch(API + path, {...opts, headers});
-  const ct = res.headers.get('content-type') || '';
-  let body = null;
-  try {
-    body = ct.includes('application/json') ? await res.json() : await res.text();
-  } catch { body = null; }
-  if(!res.ok){
-    const detail = body && typeof body === 'object' ? (body.detail || JSON.stringify(body)) : (body || res.statusText);
-    const err = new Error(typeof detail === 'string' ? detail : String(detail));
-    err.status = res.status;
-    throw err;
-  }
-  return body;
-}
-
-function setToken(t){
-  token = t || '';
-  if(t) localStorage.setItem('token', t); else localStorage.removeItem('token');
-  const authed = Boolean(t);
-  show('#upload', authed);
-  show('#list', authed);
-}
-
-// --- Auth ---
-async function registerHandler(){
-  const email = $('#email')?.value.trim();
-  const password = $('#password')?.value ?? '';
-
-  // Client password rules
-  const errs = [];
-  if(password.length < 8) errs.push('Пароль должен быть не короче 8 символов');
-  if(!/[A-Za-z]/.test(password)) errs.push('Пароль должен содержать буквы');
-  if(!/[0-9]/.test(password)) errs.push('Пароль должен содержать цифры');
-  if(errs.length){ showToast(errs[0], 'error'); return; }
-
-  try{
-    const data = await req('/auth/register', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({email, password})
-    });
-    const tkn = data?.token;
-    if(!tkn) throw new Error('Не удалось получить токен');
-    setToken(tkn);
-    await me();
-    await reload();
-    showToast('Регистрация успешна', 'success');
-  }catch(e){
-    const msg = String(e?.message || e);
-    if(/already/i.test(msg) || /зарегистр/i.test(msg)){
-      localStorage.setItem('blockedEmail', email || '');
-      $('#email')?.classList.add('error');
-      $('#register') && ($('#register').disabled = true);
-      showToast('Этот email уже зарегистрирован. Введите другой.', 'error');
-    }else{
-      showToast(msg, 'error');
-    }
-  }
-}
-
-async function loginHandler(){
-  const email = $('#email')?.value.trim();
-  const password = $('#password')?.value ?? '';
-  try{
-    const data = await req('/auth/login', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({email, password})
-    });
-    const tkn = data?.token;
-    if(!tkn) throw new Error('Не удалось получить токен');
-    setToken(tkn);
-    await me();
-    await reload();
-    showToast('Вход выполнен', 'success');
-  }catch(e){
-    showToast(String(e?.message || e), 'error');
-  }
-}
-
-function logoutHandler(){
-  setToken('');
-  $('#me') && ($('#me').textContent = 'Не авторизован');
-  showToast('Вы вышли из аккаунта', 'info');
-}
-
-// --- Tags (chips) ---
+const $ = (selector) => document.querySelector(selector);
+let token = sessionStorage.getItem('fileStorageToken') || '';
+let page = 1;
+const pageSize = 10;
 const tags = new Set();
-function renderChips(){
-  const box = $('#tagsChips'); if(!box) return;
-  box.innerHTML = '';
-  for(const t of tags){
-    const div = document.createElement('div');
-    div.className = 'chip';
-    div.innerHTML = `<span>${t}</span><button title="удалить" data-t="${t}">×</button>`;
-    on(div.querySelector('button'), 'click', () => { tags.delete(t); renderChips(); });
-    box.appendChild(div);
+let thumbUrls = [];
+let previewUrl = '';
+let listRequest = 0;
+let authGeneration = 0;
+
+function show(selector, visible) {
+  $(selector).classList.toggle('hidden', !visible);
+}
+function toast(message, type = 'success') {
+  const element = $('#toast');
+  element.textContent = message;
+  element.className = `toast ${type}`;
+  clearTimeout(window.toastTimer);
+  window.toastTimer = setTimeout(() => element.classList.add('hidden'), 4000);
+}
+function humanSize(bytes) {
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  return `${(bytes / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+async function request(path, options = {}, binary = false) {
+  const requestToken = token;
+  const headers = new Headers(options.headers);
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const response = await fetch(path, { ...options, headers });
+  if (!response.ok) {
+    let message = `Ошибка запроса (${response.status})`;
+    try {
+      const body = await response.json();
+      message = typeof body.detail === 'string' ? body.detail : 'Проверьте введённые данные';
+    } catch { /* Non-JSON errors keep the status message. */ }
+    const translations = {
+      'Invalid credentials': 'Неверный email или пароль',
+      'Email already registered': 'Этот email уже зарегистрирован. Войдите в аккаунт.',
+      'File too large': 'Файл превышает допустимый размер',
+      'Invalid token': 'Сессия истекла. Войдите снова.',
+      'User not found': 'Войдите в аккаунт снова',
+    };
+    if (response.status === 401 && token === requestToken) setToken('');
+    throw new Error(translations[message] || message);
+  }
+  return binary ? response.blob() : response.json();
+}
+function releaseThumbnails() {
+  thumbUrls.forEach((url) => URL.revokeObjectURL(url));
+  thumbUrls = [];
+}
+function closePreview() {
+  $('#previewDialog').close();
+  $('#previewImage').removeAttribute('src');
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = '';
+}
+function setToken(value) {
+  token = value;
+  authGeneration += 1;
+  listRequest += 1;
+  if (value) sessionStorage.setItem('fileStorageToken', value);
+  else sessionStorage.removeItem('fileStorageToken');
+  // Remove credentials saved by older versions of the app.
+  localStorage.removeItem('token');
+  show('#auth', !value);
+  show('#workspace', Boolean(value));
+  show('#logout', Boolean(value));
+  if (!value) {
+    releaseThumbnails();
+    closePreview();
+    $('#filesTable tbody').replaceChildren();
+    $('#me').textContent = 'Локальное хранилище';
+    $('#password').value = '';
+    $('#file').value = '';
+    $('#folder').value = '';
+    $('#search').value = '';
+    $('#tagFilter').value = '';
+    $('#stateFilter').value = 'active';
+    tags.clear();
+    renderTags();
+    updateSelection();
+    page = 1;
   }
 }
-
-// --- Upload ---
-async function handleUpload(fileList){
-  if(!fileList || fileList.length === 0) return;
-  const folder = $('#folder')?.value.trim() || '';
-  const bodyTags = JSON.stringify([...tags]);
-  for(const f of fileList){
-    const fd = new FormData();
-    fd.append('file', f);
-    if(bodyTags) fd.append('tags', bodyTags);
-    if(folder) fd.append('folder', folder);
-    try{
-      await req('/files/upload', { method:'POST', body: fd });
-    }catch(e){
-      showToast(String(e?.message || e), 'error');
-      return;
-    }
+async function authenticate(register = false) {
+  const form = $('#authForm');
+  if (!form.reportValidity()) return;
+  const password = $('#password').value;
+  if (register && (password.length < 8 || !/[A-Za-z]/.test(password) || !/[0-9]/.test(password) || new TextEncoder().encode(password).length > 72)) {
+    toast('Пароль: от 8 символов, латинская буква и цифра; не более 72 байт UTF-8.', 'error');
+    return;
   }
-  await reload();
-}
-
-async function uploadClick(){ await handleUpload($('#file')?.files); if($('#file')) $('#file').value = ''; }
-
-async function loadThumb(it, imgEl){
+  $('#login').disabled = $('#register').disabled = true;
   try {
-    const res = await fetch(`${API}/files/${it.id}/thumb`, {
-      headers: token ? {'Authorization':'Bearer '+token} : {}
+    const result = await request(`/auth/${register ? 'register' : 'login'}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: $('#email').value.trim(), password }),
     });
-    if(!res.ok) throw new Error('thumb error ' + res.status);
-    const blob = await res.blob();
-    imgEl.src = URL.createObjectURL(blob);
-  } catch(e) {
-    imgEl.style.display = 'none';
+    setToken(result.token);
+    $('#password').value = '';
+    page = 1;
+    await loadAccount();
+    await reload();
+    toast(register ? 'Аккаунт создан' : 'Вы вошли в хранилище');
+  } catch (error) { toast(error.message, 'error'); }
+  finally { $('#login').disabled = $('#register').disabled = false; }
+}
+async function loadAccount() {
+  const generation = authGeneration;
+  const user = await request('/me');
+  if (generation === authGeneration) $('#me').textContent = user.email;
+}
+function renderTags() {
+  $('#tagsChips').replaceChildren();
+  for (const tag of tags) {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    const label = document.createElement('span');
+    label.textContent = tag;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = '×';
+    remove.setAttribute('aria-label', `Удалить тег ${tag}`);
+    remove.addEventListener('click', () => { tags.delete(tag); renderTags(); });
+    chip.append(label, remove);
+    $('#tagsChips').append(chip);
   }
 }
-
-// --- List ---
-async function reload(){
-  try{
-    const q = $('#search')?.value.trim() || '';
-    const tag = $('#tagFilter')?.value.trim() || '';
-    const state = $('#stateFilter')?.value || 'active';
-    const params = new URLSearchParams();
-    if(q) params.set('q', q);
-    if(tag) params.set('tag', tag);
-    if(state) params.set('state', state);
-
-    const data = await req('/files?' + params.toString());
-    const tbody = document.querySelector('#filesTable tbody');
-    if(!tbody) return;
-    tbody.innerHTML = '';
-
-    for(const it of data.items){
-      const tr = document.createElement('tr');
-
-      const nameTd = document.createElement('td');
-      const thumb = document.createElement('img');
-      thumb.className = 'thumb'; if(it.thumb_available){ loadThumb(it, thumb); } else { thumb.style.display = 'none'; }
-      const nameSpan = document.createElement('span'); nameSpan.textContent = it.name + ' ';
-      const pathSpan = document.createElement('span'); pathSpan.className='path'; pathSpan.textContent = it.path ? `(${it.path})` : '';
-      nameTd.appendChild(thumb); nameTd.appendChild(nameSpan); nameTd.appendChild(pathSpan);
-
-      const sizeTd = document.createElement('td'); sizeTd.textContent = window.humanSize(it.size);
-      const pubTd  = document.createElement('td'); pubTd.innerHTML = `<span class="status-badge">приватный</span>`;
-      const actionsTd = document.createElement('td');
-
-      const stateVal = ($('#stateFilter')?.value || 'active');
-      if(stateVal !== 'deleted'){
-        const prev = document.createElement('button');
-        prev.textContent='Просмотр';
-        on(prev, 'click', async ()=>{
-          try{
-            const res = await fetch(`${API}/files/${it.id}/preview`, { headers: token? {'Authorization':'Bearer '+token} : {} });
-            if(!res.ok){
-              if(res.status === 401){ showToast('Сессия истекла или нет входа. Войдите снова.', 'error'); setToken(''); return; }
-              if(res.status === 403){ showToast('Нет доступа к файлу (только владелец).', 'error'); return; }
-              if(res.status === 415){ showToast('Предпросмотр недоступен для этого типа файла.', 'info'); return; }
-              showToast('Ошибка предпросмотра: '+res.statusText, 'error'); return;
-            }
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            const w = window.open(url, '_blank');
-            if(!w){ showToast('Разрешите всплывающие окна для предпросмотра', 'info'); }
-            setTimeout(()=> URL.revokeObjectURL(url), 30000);
-          }catch(err){ showToast(String(err?.message || err), 'error'); }
-        });
-        actionsTd.appendChild(prev);
-
-        const dl = document.createElement('button');
-        dl.textContent='Скачать';
-        on(dl, 'click', async ()=>{
-          try{
-            const blob = await req(`/files/${it.id}/download`);
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a'); a.href=url; a.download=it.name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-          }catch(err){ showToast(String(err?.message || err), 'error'); }
-        });
-        actionsTd.appendChild(dl);
-
-        const del = document.createElement('button');
-        del.textContent='Удалить';
-        on(del, 'click', async ()=>{
-          try{ await req(`/files/${it.id}`, { method:'DELETE' }); await reload(); }
-          catch(err){ showToast(String(err?.message || err), 'error'); }
-        });
-        actionsTd.appendChild(del);
-      } else {
-        const restore = document.createElement('button');
-        restore.textContent='Восстановить';
-        on(restore, 'click', async ()=>{
-          try{ await req(`/files/${it.id}/restore`, { method:'POST' }); await reload(); }
-          catch(err){ showToast(String(err?.message || err), 'error'); }
-        });
-        actionsTd.appendChild(restore);
-      }
-
-      tr.appendChild(nameTd);
-      tr.appendChild(sizeTd);
-      tr.appendChild(pubTd);
-      tr.appendChild(actionsTd);
-      tbody.appendChild(tr);
+function updateSelection() {
+  const files = [...$('#file').files];
+  $('#selectedFiles').textContent = files.length
+    ? `Выбрано: ${files.length} · ${files.map((file) => file.name).join(', ')}`
+    : 'Документы и изображения';
+  $('#uploadBtn').disabled = !files.length;
+}
+async function upload() {
+  const files = [...$('#file').files];
+  if (!files.length) return;
+  $('#uploadBtn').disabled = true;
+  $('#uploadBtn').textContent = 'Загрузка…';
+  let uploaded = 0;
+  try {
+    for (const file of files) {
+      const body = new FormData();
+      body.append('file', file);
+      body.append('folder', $('#folder').value.trim());
+      body.append('tags', JSON.stringify([...tags]));
+      await request('/files/upload', { method: 'POST', body });
+      uploaded += 1;
     }
-  }catch(e){
-    if(e.status === 401){ showToast('Сначала войдите в аккаунт', 'error'); setToken(''); }
-    else showToast(String(e?.message || e), 'error');
+    toast(`Загружено файлов: ${uploaded}`);
+  } catch (error) {
+    toast(`Загружено ${uploaded} из ${files.length}. ${error.message}`, 'error');
+  } finally {
+    $('#file').value = '';
+    $('#uploadBtn').textContent = 'Загрузить файлы ↑';
+    updateSelection();
+    if (token) { page = 1; await reload(); }
   }
 }
-
-async function me(){
-  try{
-    const data = await req('/me');
-    $('#me') && ($('#me').textContent = `Вы вошли: ${data.email}`);
-  }catch{
-    $('#me') && ($('#me').textContent = 'Не авторизован');
-  }
+function action(label, handler, className = 'secondary') {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = className;
+  button.textContent = label;
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    try { await handler(); }
+    catch (error) { toast(error.message, 'error'); }
+    finally { button.disabled = false; }
+  });
+  return button;
 }
-
-// --- Init ---
-function init(){
-  // Wire buttons
-  on($('#register'), 'click', registerHandler);
-  on($('#login'), 'click',    loginHandler);
-  on($('#logout'), 'click',   logoutHandler);
-  on($('#uploadBtn'), 'click', uploadClick);
-  on($('#reload'), 'click', reload);
-  on($('#stateFilter'), 'change', reload);
-
-  // Email duplicate UX
-  on($('#email'), 'input', (e)=>{
-    const blocked = localStorage.getItem('blockedEmail');
-    if(blocked && e.target.value.trim() === blocked){
-      $('#register') && ($('#register').disabled = true);
-    }else{
-      $('#register') && ($('#register').disabled = false);
-      $('#email')?.classList.remove('error');
+async function loadThumbnail(item, image, revision) {
+  try {
+    const blob = await request(`/files/${item.id}/thumb`, {}, true);
+    if (revision !== listRequest) return;
+    const url = URL.createObjectURL(blob);
+    thumbUrls.push(url);
+    image.src = url;
+  } catch { image.remove(); }
+}
+function fileRow(item, revision) {
+  const row = document.createElement('tr');
+  const nameCell = document.createElement('td');
+  const info = document.createElement('div');
+  info.className = 'file-info';
+  if (item.thumb_available) {
+    const image = document.createElement('img');
+    image.className = 'thumb';
+    image.alt = '';
+    info.append(image);
+    loadThumbnail(item, image, revision);
+  } else {
+    const icon = document.createElement('span');
+    icon.className = 'file-symbol';
+    icon.textContent = item.name.split('.').pop().slice(0, 4).toUpperCase();
+    info.append(icon);
+  }
+  const details = document.createElement('div');
+  const title = document.createElement('div');
+  title.className = 'file-title';
+  title.textContent = item.name;
+  title.title = item.name;
+  const meta = document.createElement('div');
+  meta.className = 'file-meta';
+  meta.textContent = [item.path || 'Без папки', ...item.tags.map((tag) => `#${tag}`)].join(' · ');
+  details.append(title, meta);
+  info.append(details);
+  nameCell.append(info);
+  const size = document.createElement('td');
+  size.textContent = humanSize(item.size);
+  const status = document.createElement('td');
+  const badge = document.createElement('span');
+  badge.className = `status-badge${item.state === 'deleted' ? ' deleted' : ''}`;
+  badge.textContent = item.state === 'deleted' ? 'В корзине' : 'Приватный';
+  status.append(badge);
+  const buttons = document.createElement('td');
+  buttons.className = 'file-actions';
+  if (item.state === 'deleted') {
+    buttons.append(action('Восстановить', async () => {
+      await request(`/files/${item.id}/restore`, { method: 'POST' });
+      await reload();
+      toast('Файл восстановлен');
+    }));
+  } else {
+    if (item.mime.startsWith('image/')) buttons.append(action('Просмотр', async () => {
+      const blob = await request(`/files/${item.id}/preview`, {}, true);
+      closePreview();
+      previewUrl = URL.createObjectURL(blob);
+      $('#previewImage').src = previewUrl;
+      $('#previewImage').alt = item.name;
+      $('#previewTitle').textContent = item.name;
+      $('#previewDialog').showModal();
+    }));
+    buttons.append(action('Скачать', async () => {
+      const blob = await request(`/files/${item.id}/download`, {}, true);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = item.name;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }));
+    buttons.append(action('Удалить', async () => {
+      await request(`/files/${item.id}`, { method: 'DELETE' });
+      await reload();
+      toast('Файл перемещён в корзину');
+    }, 'delete-button'));
+  }
+  row.append(nameCell, size, status, buttons);
+  return row;
+}
+async function reload() {
+  const revision = ++listRequest;
+  const params = new URLSearchParams({
+    q: $('#search').value.trim(), tag: $('#tagFilter').value.trim(),
+    state: $('#stateFilter').value, page: String(page), page_size: String(pageSize),
+  });
+  try {
+    const data = await request(`/files?${params}`);
+    if (revision !== listRequest) return;
+    const pages = Math.max(1, Math.ceil(data.total / pageSize));
+    if (page > pages) { page = pages; return reload(); }
+    releaseThumbnails();
+    $('#filesTable tbody').replaceChildren(...data.items.map((item) => fileRow(item, revision)));
+    $('#fileCount').textContent = data.total;
+    $('#pageInfo').textContent = `Страница ${page} из ${pages} · Файлов: ${data.total}`;
+    $('#prevPage').disabled = page <= 1;
+    $('#nextPage').disabled = page >= pages;
+    show('#emptyState', !data.items.length);
+  } catch (error) { if (revision === listRequest || !token) toast(error.message, 'error'); }
+}
+async function init() {
+  $('#authForm').addEventListener('submit', (event) => { event.preventDefault(); authenticate(); });
+  $('#register').addEventListener('click', () => authenticate(true));
+  $('#logout').addEventListener('click', () => { setToken(''); toast('Вы вышли из аккаунта', 'info'); });
+  $('#file').addEventListener('change', updateSelection);
+  $('#dropzone').addEventListener('click', () => $('#file').click());
+  for (const event of ['dragenter', 'dragover']) $('#dropzone').addEventListener(event, (ev) => {
+    ev.preventDefault(); $('#dropzone').classList.add('dragover');
+  });
+  for (const event of ['dragleave', 'drop']) $('#dropzone').addEventListener(event, (ev) => {
+    ev.preventDefault(); $('#dropzone').classList.remove('dragover');
+  });
+  $('#dropzone').addEventListener('drop', (event) => {
+    $('#file').files = event.dataTransfer.files;
+    updateSelection();
+  });
+  $('#tagInput').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ',') {
+      event.preventDefault();
+      const value = event.target.value.trim();
+      if (value) { tags.add(value); renderTags(); }
+      event.target.value = '';
     }
   });
-
-  // Tag chips input
-  on($('#tagInput'), 'keydown', (e)=>{
-    if(e.key === 'Enter' || e.key === ','){
-      e.preventDefault();
-      const v = e.target.value.trim();
-      if(v){ tags.add(v); renderChips(); e.target.value=''; }
-    }
-  });
-
-  // Drag & drop
-  const dz = $('#dropzone');
-  if(dz){
-    ['dragenter','dragover'].forEach(ev => on(dz, ev, (e)=>{ e.preventDefault(); dz.classList.add('dragover'); }));
-    ['dragleave','drop'].forEach(ev => on(dz, ev, (e)=>{ e.preventDefault(); dz.classList.remove('dragover'); }));
-    on(dz, 'drop', async (e)=>{
-      await handleUpload(e.dataTransfer.files);
-    });
-    on(dz, 'click', ()=> $('#file')?.click());
-  }
-
-  // Initial state
+  $('#uploadBtn').addEventListener('click', upload);
+  $('#filterForm').addEventListener('submit', (event) => { event.preventDefault(); page = 1; reload(); });
+  $('#stateFilter').addEventListener('change', () => { page = 1; reload(); });
+  $('#reload').addEventListener('click', reload);
+  $('#prevPage').addEventListener('click', () => { if (page > 1) { page -= 1; reload(); } });
+  $('#nextPage').addEventListener('click', () => { page += 1; reload(); });
+  $('#closePreview').addEventListener('click', closePreview);
+  $('#previewDialog').addEventListener('cancel', (event) => { event.preventDefault(); closePreview(); });
+  updateSelection();
   setToken(token);
-  me();
-  if(token) reload();
-
-  // Global JS errors to toast
-  window.addEventListener('error', (ev)=> showToast(ev.message || 'JS error', 'error'));
-  window.addEventListener('unhandledrejection', (ev)=> showToast(String(ev.reason?.message || ev.reason || 'Promise rejection'), 'error'));
+  try {
+    const config = await request('/api/config');
+    $('#uploadLimit').textContent = `До ${config.max_upload_mb} MB на файл`;
+  } catch { $('#uploadLimit').textContent = 'Лимит задаётся на сервере'; }
+  if (token) {
+    try { await loadAccount(); await reload(); }
+    catch (error) { toast(error.message, 'error'); }
+  }
 }
-
 document.addEventListener('DOMContentLoaded', init);
-console.log('App JS loaded');

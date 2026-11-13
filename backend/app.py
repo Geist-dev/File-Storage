@@ -1,11 +1,14 @@
-import os, json, time, mimetypes, re
-from typing import Optional, List
+import os, json, mimetypes, re
+from pathlib import Path
+from uuid import uuid4
+from typing import Optional, List, Literal
 from PIL import Image
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File as F, Form, Query
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 
 from config import settings
 from database import Base, engine, get_db
@@ -16,14 +19,6 @@ from auth import get_current_user
 
 app = FastAPI(title=settings.APP_NAME, version="0.3.0", docs_url=None, redoc_url=None)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 Base.metadata.create_all(bind=engine)
 os.makedirs(settings.STORAGE_DIR, exist_ok=True)
 
@@ -31,6 +26,8 @@ def validate_password(pw: str) -> str | None:
     """Вернуть текст ошибки, если пароль плохой; иначе None."""
     if not isinstance(pw, str) or len(pw) < 8:
         return "Пароль должен быть не короче 8 символов"
+    if len(pw.encode('utf-8')) > 72:
+        return "Пароль должен занимать не более 72 байт UTF-8"
     import re
     if not re.search(r"[A-Za-z]", pw):
         return "Пароль должен содержать хотя бы одну букву"
@@ -61,7 +58,7 @@ def to_file_out(f: File) -> dict:
         "state": f.state,
         "created_at": f.created_at.isoformat() if f.created_at else "",
         "updated_at": f.updated_at.isoformat() if f.updated_at else "",
-        "path": f.key.split("/",1)[1] if "/" in f.key else f.key,
+        "path": str(Path(f.key).parent).split("/", 1)[1] if "/" in str(Path(f.key).parent) else "",
         "thumb_available": os.path.exists(os.path.join(settings.STORAGE_DIR, f.key + ".thumb.png")),
     }
 
@@ -110,10 +107,11 @@ async def upload_file(
     mime = file.content_type or (mimetypes.guess_type(file.filename or "file")[0] or "application/octet-stream")
     if allowed and mime not in allowed:
         raise HTTPException(status_code=415, detail=f"Mime not allowed: {mime}")
-    filename = file.filename or "file"
+    filename = (file.filename or "file").replace('\\', '/').rsplit('/', 1)[-1]
+    filename = re.sub(r'[\x00-\x1f\x7f]', '', filename)[:255] or "file"
     sub = sanitize_folder(folder) if folder else ""
-    ts = int(time.time() * 1000)
-    safe = f"{ts}_{filename}".replace("..", ".")
+    # Storage identity is independent of the client-supplied name.
+    safe = uuid4().hex
     rel_key = f"{current.id}/" + (sub + "/" if sub else "") + safe
     abs_path = os.path.join(settings.STORAGE_DIR, rel_key)
     os.makedirs(os.path.dirname(abs_path), exist_ok=True)
@@ -135,8 +133,8 @@ async def upload_file(
     tag_str = tags if tags else "[]"
     try:
         t = json.loads(tag_str)
-        if not isinstance(t, list): raise ValueError
-        tag_str = json.dumps(t)
+        if not isinstance(t, list) or not all(isinstance(tag, str) for tag in t): raise ValueError
+        tag_str = json.dumps(t, ensure_ascii=False)
     except Exception:
         tag_str = "[]"
 
@@ -156,7 +154,7 @@ def list_files(
     tag: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    state: str = Query("active", description="active|deleted|all"),
+    state: Literal["active", "deleted", "all"] = Query("active"),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -166,11 +164,14 @@ def list_files(
     elif state == "deleted":
         query = query.filter(File.state == "deleted")
     if q:
-        query = query.filter(File.name.like(f"%{q}%"))
+        query = query.filter(File.name.contains(q, autoescape=True))
     if tag:
-        query = query.filter(File.tags.like(f"%\"{tag}\"%"))
+        query = query.filter(or_(
+            File.tags.contains(json.dumps(tag, ensure_ascii=False), autoescape=True),
+            File.tags.contains(json.dumps(tag, ensure_ascii=True), autoescape=True),
+        ))
     total = query.count()
-    items = query.order_by(File.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    items = query.order_by(File.created_at.desc(), File.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
     return {"items": [to_file_out(f) for f in items], "total": total, "page": page, "page_size": page_size}
 
 @app.get("/files/{file_id}/download")
@@ -227,6 +228,17 @@ def visibility(file_id: int, body: VisibilityIn, current: User = Depends(get_cur
         db.add(f); db.commit(); db.refresh(f)
     return {"file": to_file_out(f)}
 
+
+@app.get("/healthz")
+def health():
+    return {"status": "ok"}
+
+
+@app.get("/api/config")
+def public_config():
+    return {"max_upload_mb": settings.MAX_UPLOAD_MB}
+
+
 @app.patch("/files/{file_id}")
 def patch_meta(file_id: int, body: FileMetaPatchIn, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
     f = db.get(File, file_id)
@@ -235,6 +247,10 @@ def patch_meta(file_id: int, body: FileMetaPatchIn, current: User = Depends(get_
     if body.name is not None and body.name.strip():
         f.name = body.name.strip(); changed = True
     if body.tags is not None:
-        f.tags = json.dumps(list(body.tags)); changed = True
+        f.tags = json.dumps(list(body.tags), ensure_ascii=False); changed = True
     if changed: db.add(f); db.commit(); db.refresh(f)
     return {"file": to_file_out(f)}
+
+
+# Mount only public assets, after all API routes. Never serve backend/.env.
+app.mount("/", StaticFiles(directory=Path(__file__).resolve().parents[1] / "frontend", html=True), name="frontend")

@@ -1,0 +1,14 @@
+.venv/
+backend/.venv/
+.env
+.env.*
+!.env.example
+backend/.data/
+*.db
+*.db-*
+storage/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.DS_Store

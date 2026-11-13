@@ -1,13 +1,16 @@
 from datetime import datetime, timedelta, timezone
 from jose import jwt
-from passlib.hash import bcrypt
+import bcrypt
 from config import settings
 
 def hash_password(pwd: str) -> str:
-    return bcrypt.hash(pwd)
+    return bcrypt.hashpw(pwd.encode('utf-8'), bcrypt.gensalt()).decode('ascii')
 
 def verify_password(pwd: str, hashed: str) -> bool:
-    return bcrypt.verify(pwd, hashed)
+    try:
+        return bcrypt.checkpw(pwd.encode('utf-8'), hashed.encode('ascii'))
+    except (ValueError, UnicodeError):
+        return False
 
 def make_token(user_id: int, email: str) -> str:
     exp = datetime.now(timezone.utc) + timedelta(minutes=settings.JWT_EXPIRES_MIN)
